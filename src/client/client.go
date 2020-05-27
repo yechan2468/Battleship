@@ -6,9 +6,12 @@
 package main
 
 import (
-	// "encoding/gob"
+	"bufio" // get input
+	"bytes"
+	"encoding/gob"
 	"fmt"
 	"net"
+	"os"      //get input
 	"strconv" // used in getArrangement()
 	"time"
 )
@@ -17,6 +20,27 @@ import (
 var (
 	nickname string
 	language string = "en"
+	isReady bool = false
+
+	decoderBuffer bytes.Buffer
+	decoder       *gob.Decoder = gob.NewDecoder(&decoderBuffer)
+)
+
+type (
+	// have to make sure the struct names and elements start with capitalized alphabet
+	// unless they will not be exported
+	Message struct {
+		Header MessageHeader
+		Body   MessageBody
+	}
+	MessageHeader struct {
+		MessageType string
+		Nickname    string
+		Time        string
+	}
+	MessageBody struct {
+		Content string
+	}
 )
 
 const (
@@ -66,15 +90,16 @@ func main() {
 	connection := connectToServer()
 	defer connection.Close()
 
-	// read & write buffer
-	readChannel := make(chan string)
-	writeChannel := make(chan string)
+	// make gameboard
+	var myBoard [boardSize][boardSize]int
+	var enemyBoard [boardSize][boardSize]int
+	myBoard = clearBoard(myBoard, oceanTile)
+	enemyBoard = clearBoard(enemyBoard, hiddenTile)
 
-	// read and write while program is executing
-	go readServer(connection, readChannel)
-	go writeServer(connection, writeChannel)
+	// read continuously while program is executing
+	go readServer(connection, myBoard, enemyBoard)
 
-	nickname := getNickname()
+	nickname := setNickname()
 	// if user enters [q], quit the game
 	if nickname == "q" || nickname == "Q" {
 		fmt.Println("Program terminated. ")
@@ -82,31 +107,46 @@ func main() {
 	}
 
 	for true {
-		// make match and start game
-
-		// make gameboard
-		var myBoard [boardSize][boardSize]int
-		myBoard = clearBoard(myBoard, oceanTile)
+		// make match and start game *
+		
+		// write 'ready?'
+		// if response i am ready, game start
 
 		// arrange the fleets
-		printScript("\nWelcome, commander "+nickname+"! It's time for you to arrange our fleets and ready to battle. \n", "충성! 함선을 배치하고 전투를 준비하십시오.")
-		myBoard = getArrangement(myBoard)
+		printScript("\nWelcome, commander "+nickname+"! It's time for you to arrange our fleets and ready for battle. \n", "충성! 함선을 배치하고 전투를 준비하십시오.")
+		//
+		/* myBoard = getArrangement(myBoard) */
+		//
 
 		// in-game
-		var enemyBoard [boardSize][boardSize]int
-		enemyBoard = clearBoard(enemyBoard, hiddenTile)
+		for { // continuously ready input for chatting or command
+			var message string
+			in := bufio.NewReader(os.Stdin)
+			message, err := in.ReadString('\n')
+			if err != nil {
+				fmt.Println("Failed to read your command. Please try again.")
+				continue
+			}
+			writeServer(message, connection, nickname)
 
-		for i := 0; i < 20; i++ {
-			var s string
-			fmt.Scan(&s)
-			writeChannel <- s
-
-			receiver := <-readChannel
-			fmt.Println(receiver)
+			// quit game
+			winner := isDefeat(myBoard, enemyBoard) // checks winner, at every end of each player's turn. return value -1: no winner yet; 0: I win; 1: Enemy win
+			if winner >= 0 {
+				fmt.Println("Game Over!")
+				// who is winner?
+				switch winner {
+				case 0:
+					fmt.Println("===========================")
+					fmt.Println("          VICTORY          ")
+					fmt.Println("===========================")
+				case 1:
+					fmt.Println("===========================")
+					fmt.Println("          DEFEAT           ")
+					fmt.Println("===========================")
+				}
+				break
+			}
 		}
-
-		// quit game
-		break
 	}
 }
 
@@ -114,69 +154,168 @@ func main() {
 // * means still on development
 
 // functions related to network
-func connectToServer() (connection net.Conn) { // *connect to relay server
+func connectToServer() (connection net.Conn) { // connect to relay server
 	connection, err := net.Dial("tcp" /*"121.159.177.222:8200"*/, "127.0.0.1:8200")
 
 	if err != nil {
-		fmt.Println(err)
+		fmt.Println("Failed to connect to server: ", err)
+		fmt.Println("Please make sure that the server is available now. If so, please try again.")
+		fmt.Println("Battleship client shut down.")
+		time.Sleep(5 * time.Second)
 		return
 	}
 	fmt.Println("Successfully connected to server.")
 	return
 }
-func readServer(connection net.Conn, readChannel chan string) { // * listen to relay server
-	// nickname, currentUser, enemyReady, enemyAttack, isAttackSucceed, enemySurrender, enemyQuitGame
-	data := make([]byte, 4096)
+func disconnectToServer(connection net.Conn) {
+	connection.Close()
+}
+func readServer(connection net.Conn, myBoard [boardSize][boardSize]int, enemyBoard [boardSize][boardSize]int) { // listen to relay server
+	// received data is stored in it
+	data := make([]byte, 8192)
+	// decoded message is stored in it
+	var message Message
 
 	for {
-		n, err := connection.Read(data)
+		// decoder
+		var decoderBuffer bytes.Buffer
+		var decoder *gob.Decoder = gob.NewDecoder(&decoderBuffer)
 
-		// error handling
+		// read message
+		n, err := connection.Read(data)
 		if err != nil {
-			fmt.Println(err)
+			fmt.Println("Failed to read message from server: ", err)
 			return
 		}
-		fmt.Println("server: " + string(data[:n]))
 
-		// decode
+		// decode message
+		if n > 0 {
+			message = Message{}
+			decoderBuffer.Write(data[:n])
+			err = decoder.Decode(&message)
+			if err != nil {
+				fmt.Println("Failed to decode message from client:", err)
+				return
+			}
+			fmt.Println(connection.RemoteAddr(), ": ", message)
+		} else {
+			fmt.Println("message ignored because size of message <= 0.")
+		}
+		decoderBuffer.Reset()
 
-		// distinguish header and body
-
-		// return
-		readChannel <- string(data[:n])
-		time.Sleep(500 * time.Millisecond)
+		// handle request
+		if message.Header.MessageType == "chat" {
+			content := message.Body.Content
+			time := (strconv.Itoa(time.Now().Hour()) + ":" + strconv.Itoa(time.Now().Minute()) + ":" + strconv.Itoa(time.Now().Second()))
+			fmt.Println("[" + time + "] " + nickname + ": " + content)
+		} else if message.Header.MessageType == "command" {
+			// var replyMessage string
+			switch message.Body.Content[0] {
+			case 'a': // if enemy attacked my territory
+				checkAttackSucceed()
+				// write
+				updateBoard()
+			case '?': // is enemy attack succeed - attack response handling
+				// return attack coordinate, attack succeeded yes/no
+				// if yes
+				/**/ = hit
+				// else
+				/**/ = miss
+				updateBoard(/**/)
+			case 'r': // if enemy ready
+				// check whether i am ready
+				// if ready, start game
+			case 'R': // I ready and wait->Enemy ready-> confirm sign
+				// game start
+			case '!': // if enemy quit game
+				// victory
+				// quit game
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
 	}
 }
-func writeServer(connection net.Conn, writeChannel chan string) { // *
-	// nickname, ready, attack, isEnemyAttackSucceed, surrender, quitGame
-	for {
-		message := <-writeChannel
-		n, err := connection.Write([]byte(message))
-		fmt.Println(nickname + "sent the message to the server - " + message)
-		if err != nil {
-			fmt.Print(err)
-			return
+func writeServer(message string, connection net.Conn, nickname string) { // * out of range occurs on user input
+	// ready, attack, isEnemyAttackSucceed, surrender, quitGame
+
+	var (
+		encoderBuffer bytes.Buffer
+		encoder       *gob.Encoder = gob.NewEncoder(&encoderBuffer)
+		msgType, ctt  string       // ctt: content
+	)
+
+	message = message[0 : len(message)-1] // to strip '\n'
+
+	// distinguish type of message (command, chatting, gameBoard, etc.)
+	if message[0] == '/' { // if message is command
+		msgType = "command"
+
+		// command type: 'a' for attack, 'q' for quit or surrender, 'r' for ready, 'R' for confirm ready
+		if message[1] == 'h' { // help
+			fmt.Println("------------------------------------")
+			fmt.Println("/a [coordinate] : attack.	e.g. /a A1")
+			fmt.Println("/q : quit game")
+			fmt.Println("------------------------------------")
+		} else if message[1] == 'q' { // quit game
+			disconnectToServer(connection)
+			os.Exit(1)
 		}
-		_ = n
-		time.Sleep(500 * time.Millisecond)
+
+		ctt = message[1:] // command & command parameter
+	} else {
+		msgType = "chat"
+		ctt = message
+		time := (strconv.Itoa(time.Now().Hour()) + ":" + strconv.Itoa(time.Now().Minute()) + ":" + strconv.Itoa(time.Now().Second()))
+		fmt.Println("[" + time + "] " + nickname + ": " + ctt)
 	}
+
+	// make message struct form
+	msg := Message{
+		Header: MessageHeader{
+			MessageType: msgType,
+			Nickname:    nickname,
+			Time:        (strconv.Itoa(time.Now().Hour()) + ":" + strconv.Itoa(time.Now().Minute()) + ":" + strconv.Itoa(time.Now().Second())),
+		},
+		Body: MessageBody{
+			Content: ctt,
+		},
+	}
+
+	// encode message
+	err := encoder.Encode(msg)
+	if err != nil {
+		fmt.Println("Failed to encode message: ", err)
+	}
+
+	// write message
+	_, err = connection.Write(encoderBuffer.Bytes())
+	if err != nil {
+		fmt.Println("Failed to write message: ", err)
+	}
+
+	encoderBuffer.Reset()
 }
 func getCurrentUser() (currentUser int) { // * from relay server
 	currentUser = 0
 	return
 }
-func getNickname() (nickname string) { // * get nickname and save it into global variable 'nickname'
+func setNickname() (nickname string) { // get nickname and save it into global variable 'nickname'
 	printScript("Enter your nickname to continue, Enter [q] to quit. \n", "닉네임을 입력하세요. [q] 버튼을 누르면 종료됩니다.\n")
 	fmt.Print(">> ")
-	fmt.Scan(&nickname)
+
+	in := bufio.NewReader(os.Stdin)
+	line, err := in.ReadString('\n')
+	if err != nil {
+		nickname = "nickname"
+	}
+	nickname = line
+	nickname = nickname[0 : len(nickname)-1]
+
 	fmt.Print(nickname, "\n")
 	return
 }
-func disconnectToServer() { // * disconnect to relay server
-	// client.Close()
-}
 
-// in-game network
+// in-game
 func attack(x string, y string) {
 
 }

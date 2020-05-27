@@ -10,72 +10,116 @@ import (
 	"os"
 )
 
-var ()
+var (
+	numCurrentUser int
+	numMaxUser     int
+)
 
 func main() {
-	currentUsers := make([]net.Addr, 5)
+	fmt.Println("------------------------------------")
+	fmt.Println("'Battleship' game server.")
+	fmt.Println("Written by Yechan Lee, 2020.04. -")
+	fmt.Println("------------------------------------")
+
+	currentUsers := make(map[net.Conn]net.Addr)
+	readyUsers := make(map[net.Conn]net.Addr)
+	numCurrentUser = 0
 	go userCommand(currentUsers)
 
 	listener, err := net.Listen("tcp", ":8200")
-
 	// error handling
 	if err != nil {
-		fmt.Print(err)
+		fmt.Println("Failed to tcp Listen(): ", err)
 		return
 	}
+	fmt.Println("Network protocol: \"tcp\", Address: \":8200\"")
+	fmt.Print("\n")
+
 	defer listener.Close()
 
 	for {
 		connection, err := listener.Accept()
 		if err != nil {
-			fmt.Print(err)
+			fmt.Println("Failed to tcp Accept(): ", err)
 			continue
 		} else {
-			fmt.Print(connection.LocalAddr())
-			fmt.Print(" connected to server.")
-			currentUsers = append(currentUsers, connection.LocalAddr())
+			fmt.Print(connection.RemoteAddr())
+			fmt.Print(" joined the server.\n")
+			currentUsers[connection] = connection.RemoteAddr()
+			numCurrentUser += 1
 		}
-		defer connection.Close()
+		defer closeConnection(connection, currentUsers, connection.RemoteAddr())
 
-		go requestHandler(connection)
+		go requestHandler(connection, currentUsers, readyUsers)
 	}
 }
 
-func requestHandler(connection net.Conn) {
-	data := make([]byte, 4096)
+func closeConnection(connection net.Conn, currentUsers map[net.Conn]net.Addr, address net.Addr) { //* not working properly
+	var foundUser bool = false
+	for conn, addr := range currentUsers { // find address index in 'currentUsers' map
+		if addr == address {
+			fmt.Println(addr, "left the server.")
+			delete(currentUsers, conn)
+			foundUser = true
+
+			numCurrentUser -= 1
+		}
+	}
+	if !foundUser { // error handling
+		fmt.Println("Error in 'closeConnection': failed to find and erase user address in 'currentUsers' map.")
+		return
+	}
+
+	connection.Close()
+}
+
+func requestHandler(connection net.Conn, currentUsers map[net.Conn]net.Addr, readyUsers map[net.Conn]net.Addr) {
+	// received data is stored in it
+	data := make([]byte, 8192)
 
 	for {
-		n, err := connection.Read(data)
-
+		// read message
+		_, err := connection.Read(data)
 		if err != nil {
-			fmt.Println(err)
+			fmt.Println("Failed to read data: ", err)
 			return
 		}
 
-		connection.Write(data[:n])
-		fmt.Println("Server read the message: " + string(data[:n]))
-
-		if err != nil {
-			fmt.Println(err)
-			return
+		// reply message
+		for conn := range currentUsers {
+			if connection != conn {
+				_, err = connection.Write(data)
+			}
+			if err != nil {
+				fmt.Println("Failed to write data: ", err)
+				return
+			}
 		}
 	}
 }
 
-func userCommand(currentUsers []net.Addr) {
+func userCommand(currentUsers map[net.Conn]net.Addr) {
 	for {
 		var cmd string
 		fmt.Scan(&cmd)
 		if cmd == "/help" {
-			fmt.Println("/q: quit")
-			fmt.Println("/u: print current user information")
-		}
-		if cmd == "/q" {
+			fmt.Println("----------------------------------------")
+			fmt.Println("/exit: quit")
+			fmt.Println("/user: print current user information")
+			fmt.Println("----------------------------------------")
+		} else if cmd == "/exit" {
+			fmt.Println("server shut down.")
 			os.Exit(1)
 		} else if cmd == "/user" {
-			for _, user := range currentUsers {
-				fmt.Println(user)
+			fmt.Println("----------------------------------------")
+			fmt.Print("Number of user(s): ", numCurrentUser, "\n")
+			fmt.Println("Network Connection\tAddress")
+			for conn, addr := range currentUsers {
+				fmt.Println(conn, addr)
 			}
+			fmt.Println("----------------------------------------")
+		} else {
+			fmt.Println("Failed to find command: ", cmd)
 		}
 	}
 }
