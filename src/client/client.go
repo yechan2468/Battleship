@@ -20,7 +20,6 @@ import (
 var (
 	nickname string
 	language string = "en"
-	isReady bool = false
 
 	decoderBuffer bytes.Buffer
 	decoder       *gob.Decoder = gob.NewDecoder(&decoderBuffer)
@@ -52,7 +51,7 @@ const (
 	sunkTile       int = -2
 	hitTile        int = -1
 	oceanTile      int = 0 // my territory: empty field / enemy territory: hit missed
-	hiddenTile     int = 1 // use only in enemy territory
+	hiddenTile     int = 1 // my territory: hit missed / enemy territory: empry field
 	destroyerTile  int = 2
 	submarineTile  int = 3
 	cruiserTile    int = 4
@@ -96,27 +95,42 @@ func main() {
 	myBoard = clearBoard(myBoard, oceanTile)
 	enemyBoard = clearBoard(enemyBoard, hiddenTile)
 
-	// read continuously while program is executing
-	go readServer(connection, myBoard, enemyBoard)
-
-	nickname := setNickname()
+	nickname = setNickname()
 	// if user enters [q], quit the game
 	if nickname == "q" || nickname == "Q" {
 		fmt.Println("Program terminated. ")
 		return
 	}
 
-	for true {
-		// make match and start game *
-		
-		// write 'ready?'
-		// if response i am ready, game start
+	// arrange the fleets
+	printScript("\nWelcome, commander "+nickname+"! It's time for you to arrange our fleets and ready for battle. \n", "충성! 함선을 배치하고 전투를 준비하십시오.")
+	myBoard = getArrangement(myBoard)
 
-		// arrange the fleets
-		printScript("\nWelcome, commander "+nickname+"! It's time for you to arrange our fleets and ready for battle. \n", "충성! 함선을 배치하고 전투를 준비하십시오.")
-		//
-		/* myBoard = getArrangement(myBoard) */
-		//
+	// read continuously while program is executing
+	var isReady bool = false
+	var enemyReady bool = false
+	go readServer(connection, &myBoard, &enemyBoard, &isReady, &enemyReady)
+
+	for true {
+		// write 'i am ready. are you ready?'
+		// if response i am ready, game start
+		fmt.Print("Making match queue, please wait for another player")
+		for i := 0; i < 60; i++ { // wait for 60sec
+			time.Sleep(1 * time.Second)
+			writeServer("/r", connection)
+			isReady = true
+			if isReady && enemyReady {
+				break
+			} else {
+				fmt.Print(".")
+				continue
+			}
+			os.Exit(1)
+		}
+		fmt.Print("\n")
+
+		// make match and start game
+		fmt.Println("Found Match!")
 
 		// in-game
 		for { // continuously ready input for chatting or command
@@ -127,25 +141,14 @@ func main() {
 				fmt.Println("Failed to read your command. Please try again.")
 				continue
 			}
-			writeServer(message, connection, nickname)
+			writeServer(message, connection)
 
 			// quit game
 			winner := isDefeat(myBoard, enemyBoard) // checks winner, at every end of each player's turn. return value -1: no winner yet; 0: I win; 1: Enemy win
 			if winner >= 0 {
-				fmt.Println("Game Over!")
-				// who is winner?
-				switch winner {
-				case 0:
-					fmt.Println("===========================")
-					fmt.Println("          VICTORY          ")
-					fmt.Println("===========================")
-				case 1:
-					fmt.Println("===========================")
-					fmt.Println("          DEFEAT           ")
-					fmt.Println("===========================")
-				}
-				break
+				declareWinner(winner)
 			}
+			time.Sleep(10 * time.Second)
 		}
 	}
 }
@@ -155,7 +158,8 @@ func main() {
 
 // functions related to network
 func connectToServer() (connection net.Conn) { // connect to relay server
-	connection, err := net.Dial("tcp" /*"121.159.177.222:8200"*/, "127.0.0.1:8200")
+	//connection, err := net.Dial("tcp", "121.159.177.222:8200")
+	connection, err := net.Dial("tcp", "127.0.0.1:8200")
 
 	if err != nil {
 		fmt.Println("Failed to connect to server: ", err)
@@ -170,9 +174,9 @@ func connectToServer() (connection net.Conn) { // connect to relay server
 func disconnectToServer(connection net.Conn) {
 	connection.Close()
 }
-func readServer(connection net.Conn, myBoard [boardSize][boardSize]int, enemyBoard [boardSize][boardSize]int) { // listen to relay server
+func readServer(connection net.Conn, pMyBoard *[boardSize][boardSize]int, pEnemyBoard *[boardSize][boardSize]int, pIsReady *bool, pEnemyReady *bool) { // listen to relay server
 	// received data is stored in it
-	data := make([]byte, 8192)
+	data := make([]byte, 4096)
 	// decoded message is stored in it
 	var message Message
 
@@ -195,47 +199,85 @@ func readServer(connection net.Conn, myBoard [boardSize][boardSize]int, enemyBoa
 			err = decoder.Decode(&message)
 			if err != nil {
 				fmt.Println("Failed to decode message from client:", err)
-				return
+				continue
 			}
-			fmt.Println(connection.RemoteAddr(), ": ", message)
 		} else {
 			fmt.Println("message ignored because size of message <= 0.")
 		}
 		decoderBuffer.Reset()
 
+		// ignore if the message is sent by myself
+		if message.Header.Nickname == nickname {
+			continue
+		}
+
 		// handle request
+		// fmt.Println("Received: ", message)
 		if message.Header.MessageType == "chat" {
 			content := message.Body.Content
 			time := (strconv.Itoa(time.Now().Hour()) + ":" + strconv.Itoa(time.Now().Minute()) + ":" + strconv.Itoa(time.Now().Second()))
-			fmt.Println("[" + time + "] " + nickname + ": " + content)
+			fmt.Println("[" + time + "] " + message.Header.Nickname + ": " + content)
 		} else if message.Header.MessageType == "command" {
 			// var replyMessage string
 			switch message.Body.Content[0] {
 			case 'a': // if enemy attacked my territory
-				checkAttackSucceed()
-				// write
-				updateBoard()
+				// get underattack coordinate
+				var row int = int(message.Body.Content[2] - 'A')   // row in integer value
+				var col int = int((message.Body.Content[3]) - '1') // column in integer value
+
+				isAttackSucceed := "0"
+				var tile int
+				printScript("The enemy shot "+message.Body.Content[2:4]+"; ", "")
+				if checkAttackSucceed(row, col, *(pMyBoard)) {
+					tile = hitTile // my territory, hit
+					isAttackSucceed = "1"
+					printScript("Hit!\n", "")
+					updateBoard(pMyBoard, row, col, tile)
+					showBoard(*pMyBoard, *pEnemyBoard)
+				} else {
+					tile = hiddenTile // my territory, missed
+					printScript("Missed!\n", "")
+					updateBoard(pMyBoard, row, col, tile)
+					showBoard(*pMyBoard, *pEnemyBoard)
+				}
+				// writes "/? 1rc" when attack succeeded, else "/? 0rc"
+				// rc means integer value of row and column
+				writeServer("/? "+isAttackSucceed+strconv.Itoa(row)+strconv.Itoa(col), connection)
+
 			case '?': // is enemy attack succeed - attack response handling
 				// return attack coordinate, attack succeeded yes/no
-				// if yes
-				/**/ = hit
-				// else
-				/**/ = miss
-				updateBoard(/**/)
+				isAttackSucceed := int(message.Body.Content[2] - '0') // 0 or 1 (int)
+				var row int = int(message.Body.Content[3] - '0')      // row in integer value
+				var col int = int((message.Body.Content[4]) - '0')    // column in integer value
+				// if attack succeeded
+				if isAttackSucceed == 1 {
+					updateBoard(pEnemyBoard, row, col, hitTile) // enemy territory, hit
+					showBoard(*pMyBoard, *pEnemyBoard)
+					printScript("HIT!\n", "명중!")
+				} else {
+					updateBoard(pEnemyBoard, row, col, oceanTile) // enemy territory, missed
+					showBoard(*pMyBoard, *pEnemyBoard)
+					printScript("missed.\n", "타격 실패.")
+				}
+
 			case 'r': // if enemy ready
-				// check whether i am ready
-				// if ready, start game
+				// check whether i am ready; if ready, start game
+				*pEnemyReady = true
+				if *pIsReady && *pEnemyReady {
+					writeServer("/R", connection)
+				}
 			case 'R': // I ready and wait->Enemy ready-> confirm sign
-				// game start
+				*pEnemyReady = true
 			case '!': // if enemy quit game
-				// victory
-				// quit game
+				fmt.Println("Enemy Declared Surrender!")
+				declareWinner(1)
+				os.Exit(1)
 			}
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(50 * time.Millisecond)
 		}
 	}
 }
-func writeServer(message string, connection net.Conn, nickname string) { // * out of range occurs on user input
+func writeServer(message string, connection net.Conn) { // * out of range occurs on user input
 	// ready, attack, isEnemyAttackSucceed, surrender, quitGame
 
 	var (
@@ -244,7 +286,9 @@ func writeServer(message string, connection net.Conn, nickname string) { // * ou
 		msgType, ctt  string       // ctt: content
 	)
 
-	message = message[0 : len(message)-1] // to strip '\n'
+	if message[len(message)-1] == '\n' { // to strip '\n'
+		message = message[0 : len(message)-1]
+	}
 
 	// distinguish type of message (command, chatting, gameBoard, etc.)
 	if message[0] == '/' { // if message is command
@@ -259,6 +303,13 @@ func writeServer(message string, connection net.Conn, nickname string) { // * ou
 		} else if message[1] == 'q' { // quit game
 			disconnectToServer(connection)
 			os.Exit(1)
+		} else if message[1] == 'a' { // attack
+			fmt.Println("[command] ATTACK " + message[3:])
+		} else if message[1] == 'r' || message[1] == 'R' || message[1] == '?' || message[1] == '!' {
+			/* Do nothing */
+		} else {
+			fmt.Println("Failed to find command: ", message)
+			return
 		}
 
 		ctt = message[1:] // command & command parameter
@@ -281,6 +332,8 @@ func writeServer(message string, connection net.Conn, nickname string) { // * ou
 		},
 	}
 
+	// fmt.Println("Sent: ", msg)
+
 	// encode message
 	err := encoder.Encode(msg)
 	if err != nil {
@@ -295,7 +348,7 @@ func writeServer(message string, connection net.Conn, nickname string) { // * ou
 
 	encoderBuffer.Reset()
 }
-func getCurrentUser() (currentUser int) { // * from relay server
+func getCurrentUser() (currentUser int) { // *
 	currentUser = 0
 	return
 }
@@ -315,16 +368,14 @@ func setNickname() (nickname string) { // get nickname and save it into global v
 	return
 }
 
-// in-game
-func attack(x string, y string) {
-
-}
-func checkAttackSucceed(myBoard [boardSize][boardSize]int) bool { // *
-	// read
-	return false
-}
-
 // functions related to gameboard
+func checkAttackSucceed(row int, col int, myBoard [boardSize][boardSize]int) bool {
+	if myBoard[row][col] == oceanTile || myBoard[row][col] == hiddenTile {
+		return false
+	} else {
+		return true
+	}
+}
 func clearBoard(board [boardSize][boardSize]int, tileNum int) [boardSize][boardSize]int { // clear the whole board tile to designated tile
 	for row := 0; row < boardSize; row++ {
 		for col := 0; col < boardSize; col++ {
@@ -520,10 +571,9 @@ END_ARRANGE:
 	printScript("All right, arrangement all done. \n", "알겠습니다. 전투 준비를 완료했습니다!")
 	return myBoard
 }
-func updateBoard(myBoard [boardSize][boardSize]int, enemyBoard [boardSize][boardSize]int) ([boardSize][boardSize]int, [boardSize][boardSize]int) { // *
-	// read board changes from server
-	// update
-	return myBoard, enemyBoard
+func updateBoard(board *[boardSize][boardSize]int, row int, col int, tileNum int) {
+	// read board changes from server and update
+	(*board)[row][col] = tileNum
 }
 func isDefeat(myBoard [boardSize][boardSize]int, enemyBoard [boardSize][boardSize]int) int { // checks winner, at every end of each player's turn. return value -1: no winner yet; 0: I win; 1: Enemy win
 	damagedCount := 0
@@ -541,9 +591,9 @@ func isDefeat(myBoard [boardSize][boardSize]int, enemyBoard [boardSize][boardSiz
 	}
 
 	if damagedCount >= 20 {
-		return 0
-	} else if enemyDamagedCount >= 20 {
 		return 1
+	} else if enemyDamagedCount >= 20 {
+		return 0
 	} else {
 		return -1
 	}
@@ -552,8 +602,8 @@ func isDefeat(myBoard [boardSize][boardSize]int, enemyBoard [boardSize][boardSiz
 // functions related to UI
 func mainScene() { // main scene UI
 	printScript("Welcome to 'Battleship' game. This is main scene.\n", "'Battleship' 게임의 메인 화면입니다.\n")
-	currentUser := getCurrentUser()
-	fmt.Println("Number of current user: ", currentUser)
+	//currentUser := getCurrentUser()
+	//fmt.Println("Number of current user: ", currentUser)
 }
 func selectLanguage() { // needs more development
 	fmt.Print("Select language: [en/kr]\n")
@@ -591,5 +641,19 @@ func checkTile() { // just for checking, have no effect on operation
 	for i := -2; i < 10; i++ {
 		fmt.Print(i, ": ")
 		printLine(i, 1)
+	}
+}
+func declareWinner(winner int) {
+	fmt.Println("Game Over!")
+	// who is winner?
+	switch winner {
+	case 0:
+		fmt.Println("===========================")
+		fmt.Println("          VICTORY          ")
+		fmt.Println("===========================")
+	case 1:
+		fmt.Println("===========================")
+		fmt.Println("          DEFEAT           ")
+		fmt.Println("===========================")
 	}
 }

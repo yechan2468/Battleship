@@ -32,7 +32,7 @@ func main() {
 		fmt.Println("Failed to tcp Listen(): ", err)
 		return
 	}
-	fmt.Println("Network protocol: \"tcp\", Address: \":8200\"")
+	fmt.Println("Network protocol: \"tcp\", Address: \"121.159.177.222\"\nListening: \":8200\"")
 	fmt.Print("\n")
 
 	defer listener.Close()
@@ -75,7 +75,7 @@ func closeConnection(connection net.Conn, currentUsers map[net.Conn]net.Addr, ad
 
 func requestHandler(connection net.Conn, currentUsers map[net.Conn]net.Addr, readyUsers map[net.Conn]net.Addr) {
 	// received data is stored in it
-	data := make([]byte, 8192)
+	data := make([]byte, 4096)
 
 	for {
 		// read message
@@ -87,9 +87,8 @@ func requestHandler(connection net.Conn, currentUsers map[net.Conn]net.Addr, rea
 
 		// reply message
 		for conn := range currentUsers {
-			if connection != conn {
-				_, err = connection.Write(data)
-			}
+			_, err = conn.Write(data)
+			fmt.Println(connection, "Passed the message to ", conn)
 			if err != nil {
 				fmt.Println("Failed to write data: ", err)
 				return
