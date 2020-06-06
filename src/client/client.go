@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
+	"math/rand"
 	"net"
 	"os"      //get input
 	"strconv" // used in getArrangement()
@@ -21,8 +22,8 @@ var (
 	nickname string
 	language string = "en"
 
-	decoderBuffer bytes.Buffer
-	decoder       *gob.Decoder = gob.NewDecoder(&decoderBuffer)
+	// decoderBuffer bytes.Buffer
+	// decoder       *gob.Decoder = gob.NewDecoder(&decoderBuffer)
 )
 
 type (
@@ -67,7 +68,7 @@ const (
 	hiddenUnicode     string = "\u2592" // medium shade
 	destroyerUnicode  string = "\u2638" // rudder sign
 	submarineUnicode  string = "\u269B" // nuclear symbol
-	cruiserUnicode    string = "\u2693" // anchor symbol
+	cruiserUnicode    string = "\u2726" // diamond symbol
 	battleshipUnicode string = "\u274B" // mugunghwa symbol
 	carrierUnicode    string = "\u272F" // star symbol
 	lightLineUnicode                    // scriptstring = "\u2500"
@@ -109,7 +110,8 @@ func main() {
 	// read continuously while program is executing
 	var isReady bool = false
 	var enemyReady bool = false
-	go readServer(connection, &myBoard, &enemyBoard, &isReady, &enemyReady)
+	var myTurn bool = false
+	go readServer(connection, &myBoard, &enemyBoard, &isReady, &enemyReady, &myTurn)
 
 	for true {
 		// write 'i am ready. are you ready?'
@@ -117,23 +119,38 @@ func main() {
 		fmt.Print("Making match queue, please wait for another player")
 		for i := 0; i < 60; i++ { // wait for 60sec
 			time.Sleep(1 * time.Second)
-			writeServer("/r", connection)
+			writeServer("/r", connection, &myTurn) // myTurn value is changed here
 			isReady = true
 			if isReady && enemyReady {
 				break
 			} else {
 				fmt.Print(".")
+				if i >= 59 {
+					os.Exit(1)
+				}
 				continue
 			}
-			os.Exit(1)
 		}
 		fmt.Print("\n")
 
 		// make match and start game
 		fmt.Println("Found Match!")
+		fmt.Print("\n")
+
+		// keyboard shortcuts notice
+		writeServer("/h", connection, &myTurn)
+		fmt.Print("You can get help on keyboard shortcuts by typing \"/h\".\n")
+
+		// turn notice
+		// if myTurn {
+		// 	fmt.Println("It is your turn! Attack the enemy's territory using command \"/a\".")
+		// } else {
+		// 	fmt.Println("It's enemy's turn! Please wait for seconds.")
+		// }
 
 		// in-game
-		for { // continuously ready input for chatting or command
+		var destroyedCheck [5]bool // checks if carrier, battleship, cruiser, submarine, destroyer is destroyed. if destroyed, the element in bool array is "true".
+		for {                      // continuously ready input for chatting or command
 			var message string
 			in := bufio.NewReader(os.Stdin)
 			message, err := in.ReadString('\n')
@@ -141,7 +158,19 @@ func main() {
 				fmt.Println("Failed to read your command. Please try again.")
 				continue
 			}
-			writeServer(message, connection)
+			writeServer(message, connection, &myTurn)
+
+			// If my fleets are destroyed, notice to enemy
+			result := isDestoyed(&myBoard)
+			for idx, count := range result {
+				if count == 0 {
+					if destroyedCheck[idx] == false { // if not noticed so far
+						tmp := strconv.Itoa(idx)
+						writeServer("/"+tmp, connection, &myTurn)
+						destroyedCheck[idx] = true // noticed
+					}
+				}
+			}
 
 			// quit game
 			winner := isDefeat(myBoard, enemyBoard) // checks winner, at every end of each player's turn. return value -1: no winner yet; 0: I win; 1: Enemy win
@@ -152,14 +181,43 @@ func main() {
 		}
 	}
 }
+func isDestoyed(myBoard *[boardSize][boardSize]int) [5]int {
+	var (
+		carrierCount    int = 0
+		battleshipCount int = 0
+		cruiserCount    int = 0
+		submarineCount  int = 0
+		destoryerCount  int = 0
+	)
+
+	for i := 0; i < boardSize; i++ {
+		for j := 0; j < boardSize; j++ {
+			switch (*myBoard)[i][j] {
+			case carrierTile:
+				carrierCount++
+			case battleshipTile:
+				battleshipCount++
+			case cruiserTile:
+				cruiserCount++
+			case submarineTile:
+				submarineCount++
+			case destroyerTile:
+				destoryerCount++
+			}
+		}
+	}
+
+	var result [5]int = [5]int{carrierCount, battleshipCount, cruiserCount, submarineCount, destoryerCount}
+	return result
+}
 
 // FUNCTIONS
 // * means still on development
 
 // functions related to network
 func connectToServer() (connection net.Conn) { // connect to relay server
-	//connection, err := net.Dial("tcp", "121.159.177.222:8200")
-	connection, err := net.Dial("tcp", "127.0.0.1:8200")
+	connection, err := net.Dial("tcp", "121.159.177.222:8200")
+	//connection, err := net.Dial("tcp", "127.0.0.1:8200")
 
 	if err != nil {
 		fmt.Println("Failed to connect to server: ", err)
@@ -174,9 +232,9 @@ func connectToServer() (connection net.Conn) { // connect to relay server
 func disconnectToServer(connection net.Conn) {
 	connection.Close()
 }
-func readServer(connection net.Conn, pMyBoard *[boardSize][boardSize]int, pEnemyBoard *[boardSize][boardSize]int, pIsReady *bool, pEnemyReady *bool) { // listen to relay server
+func readServer(connection net.Conn, pMyBoard *[boardSize][boardSize]int, pEnemyBoard *[boardSize][boardSize]int, pIsReady *bool, pEnemyReady *bool, pMyTurn *bool) { // listen to relay server
 	// received data is stored in it
-	data := make([]byte, 4096)
+	data := make([]byte, 256)
 	// decoded message is stored in it
 	var message Message
 
@@ -189,7 +247,9 @@ func readServer(connection net.Conn, pMyBoard *[boardSize][boardSize]int, pEnemy
 		n, err := connection.Read(data)
 		if err != nil {
 			fmt.Println("Failed to read message from server: ", err)
-			return
+			fmt.Println("Server connection lost.")
+			time.Sleep(5 * time.Second)
+			os.Exit(1)
 		}
 
 		// decode message
@@ -212,11 +272,10 @@ func readServer(connection net.Conn, pMyBoard *[boardSize][boardSize]int, pEnemy
 		}
 
 		// handle request
-		// fmt.Println("Received: ", message)
+		// for debugging
+		// fmt.Print("Received: ", message, "\n")
 		if message.Header.MessageType == "chat" {
-			content := message.Body.Content
-			time := (strconv.Itoa(time.Now().Hour()) + ":" + strconv.Itoa(time.Now().Minute()) + ":" + strconv.Itoa(time.Now().Second()))
-			fmt.Println("[" + time + "] " + message.Header.Nickname + ": " + content)
+			fmt.Print("[", message.Header.Time, "] ", message.Header.Nickname, ": ", message.Body.Content, "\n")
 		} else if message.Header.MessageType == "command" {
 			// var replyMessage string
 			switch message.Body.Content[0] {
@@ -227,22 +286,26 @@ func readServer(connection net.Conn, pMyBoard *[boardSize][boardSize]int, pEnemy
 
 				isAttackSucceed := "0"
 				var tile int
-				printScript("The enemy shot "+message.Body.Content[2:4]+"; ", "")
+				printScript("The enemy shot my territory "+message.Body.Content[2:4]+"; \n", "")
 				if checkAttackSucceed(row, col, *(pMyBoard)) {
 					tile = hitTile // my territory, hit
 					isAttackSucceed = "1"
-					printScript("Hit!\n", "")
 					updateBoard(pMyBoard, row, col, tile)
 					showBoard(*pMyBoard, *pEnemyBoard)
+					printScript("Hit!\n", "")
 				} else {
 					tile = hiddenTile // my territory, missed
-					printScript("Missed!\n", "")
 					updateBoard(pMyBoard, row, col, tile)
 					showBoard(*pMyBoard, *pEnemyBoard)
+					printScript("Missed!\n", "")
 				}
 				// writes "/? 1rc" when attack succeeded, else "/? 0rc"
-				// rc means integer value of row and column
-				writeServer("/? "+isAttackSucceed+strconv.Itoa(row)+strconv.Itoa(col), connection)
+				// rc stands for integer value of row and column
+				writeServer("/? "+isAttackSucceed+strconv.Itoa(row)+strconv.Itoa(col), connection, pMyTurn)
+
+				*pMyTurn = true // bool myTurn is set false by default
+				fmt.Println("")
+				fmt.Println("[Your Turn]")
 
 			case '?': // is enemy attack succeed - attack response handling
 				// return attack coordinate, attack succeeded yes/no
@@ -259,25 +322,51 @@ func readServer(connection net.Conn, pMyBoard *[boardSize][boardSize]int, pEnemy
 					showBoard(*pMyBoard, *pEnemyBoard)
 					printScript("missed.\n", "타격 실패.")
 				}
+				*pMyTurn = false
+				fmt.Println("")
+				fmt.Println("[Enemy's Turn]")
 
 			case 'r': // if enemy ready
 				// check whether i am ready; if ready, start game
 				*pEnemyReady = true
 				if *pIsReady && *pEnemyReady {
-					writeServer("/R", connection)
+					turnInt := rand.Int() % 2 // turnInt[0,1] is used to determine who will start the first turn.
+					if turnInt == 1 {         // if random number is 1, I start first and enemy start later
+						*pMyTurn = true
+					} else {
+						*pMyTurn = false
+					}
+					writeServer("/R "+strconv.Itoa(turnInt), connection, pMyTurn)
 				}
-			case 'R': // I ready and wait->Enemy ready-> confirm sign
+			case 'R': // I ready and wait->Enemy ready-> confirm sign; decide first turn
 				*pEnemyReady = true
+				if message.Body.Content[2] == '0' { // if enemy starts later
+					*pMyTurn = true // I start the first turn
+				} else {
+					*pMyTurn = false
+				}
 			case '!': // if enemy quit game
 				fmt.Println("Enemy Declared Surrender!")
-				declareWinner(1)
+				declareWinner(0)
+				time.Sleep(10 * time.Second)
 				os.Exit(1)
+			// below: enemy fleet sunk notice
+			case '0':
+				fmt.Println("Enemy Carrier Sunk!")
+			case '1':
+				fmt.Println("Enemy Battleship Sunk!")
+			case '2':
+				fmt.Println("Enemy Cruiser Sunk!")
+			case '3':
+				fmt.Println("Enemy Submarine Sunk!")
+			case '4':
+				fmt.Println("Enemy Destroyer Sunk!")
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
 }
-func writeServer(message string, connection net.Conn) { // * out of range occurs on user input
+func writeServer(message string, connection net.Conn, pMyTurn *bool) { // * out of range occurs on user input
 	// ready, attack, isEnemyAttackSucceed, surrender, quitGame
 
 	var (
@@ -290,22 +379,37 @@ func writeServer(message string, connection net.Conn) { // * out of range occurs
 		message = message[0 : len(message)-1]
 	}
 
+	if len(message) == 0 { // ignore empty messages
+		return
+	}
+
 	// distinguish type of message (command, chatting, gameBoard, etc.)
 	if message[0] == '/' { // if message is command
 		msgType = "command"
 
 		// command type: 'a' for attack, 'q' for quit or surrender, 'r' for ready, 'R' for confirm ready
 		if message[1] == 'h' { // help
-			fmt.Println("------------------------------------")
-			fmt.Println("/a [coordinate] : attack.	e.g. /a A1")
-			fmt.Println("/q : quit game")
-			fmt.Println("------------------------------------")
-		} else if message[1] == 'q' { // quit game
+			fmt.Println("-------------------------------------------------------")
+			fmt.Println("[CHATS]")
+			fmt.Println("  If you enter what you want to say, you can chat with")
+			fmt.Println("  another player.    e.g. Hello!")
+			fmt.Println("[COMMANDS]")
+			fmt.Println("  /a [coordinate] : attack.	e.g. /a A1")
+			fmt.Println("  /q : quit game")
+			fmt.Println("-------------------------------------------------------")
+		} else if message[1] == 'q' { // quit game\
+			writeServer("/!", connection, pMyTurn)
 			disconnectToServer(connection)
 			os.Exit(1)
 		} else if message[1] == 'a' { // attack
-			fmt.Println("[command] ATTACK " + message[3:])
-		} else if message[1] == 'r' || message[1] == 'R' || message[1] == '?' || message[1] == '!' {
+			if *pMyTurn {
+				fmt.Println("[command] ATTACK " + message[3:])
+			} else {
+				fmt.Println("It's not your turn. Please wait for another player to attack.")
+				return
+			}
+
+		} else if message[1] == 'r' || message[1] == 'R' || message[1] == '?' || message[1] == '!' || message[1] == '0' || message[1] == '1' || message[1] == '2' || message[1] == '3' || message[1] == '4' {
 			/* Do nothing */
 		} else {
 			fmt.Println("Failed to find command: ", message)
@@ -332,7 +436,8 @@ func writeServer(message string, connection net.Conn) { // * out of range occurs
 		},
 	}
 
-	// fmt.Println("Sent: ", msg)
+	// for debugging
+	//fmt.Print("Sent: ", msg, "\n")
 
 	// encode message
 	err := encoder.Encode(msg)
@@ -341,7 +446,9 @@ func writeServer(message string, connection net.Conn) { // * out of range occurs
 	}
 
 	// write message
-	_, err = connection.Write(encoderBuffer.Bytes())
+	data := make([]byte, 0, 256)                  // bytes slice that consists length 0 and capacity 256
+	data = append(data, encoderBuffer.Bytes()...) // to make data size consistent
+	_, err = connection.Write(data)
 	if err != nil {
 		fmt.Println("Failed to write message: ", err)
 	}
@@ -385,19 +492,19 @@ func clearBoard(board [boardSize][boardSize]int, tileNum int) [boardSize][boardS
 	return board
 }
 func showBoard(myBoard [boardSize][boardSize]int, enemyBoard [boardSize][boardSize]int) { // boards consist of integers -> convert them to unicode -> print
+	println("======================================================================")
 	switch language {
 	case "kr":
 		fmt.Print("          << 아군 영해 >>        \t           << 적군 영해 >>       \n    ")
 	case "en":
 		fmt.Print("         << My Territory >>      \t         << Enemy Territory >>      \n    ")
 	}
-
 	for i := 0; i < boardSize; i++ {
-		fmt.Print(i+1, "  ")
+		fmt.Print(i+1, " ")
 	}
 	fmt.Print("\t    ")
 	for i := 0; i < boardSize; i++ {
-		fmt.Print(i+1, "  ")
+		fmt.Print(i+1, " ")
 	}
 	fmt.Print("\n")
 
@@ -418,6 +525,7 @@ func showBoard(myBoard [boardSize][boardSize]int, enemyBoard [boardSize][boardSi
 		}
 		fmt.Print("\n")
 	}
+	println("======================================================================")
 }
 func convertToUnicode(tileNum int) (unicode string) { // converts tile number -> corresponding unicode string
 	switch tileNum {
@@ -539,7 +647,7 @@ ARRANGE:
 			fmt.Scan(&pos, &dir)
 			row := int(pos[0]) - 'A'        // row index starting from 0
 			col, _ := strconv.Atoi(pos[1:]) // column index starting from 0
-			col -= 1
+			col--
 
 			if isArrangeInputValid(row, col, dir, 6-i, myBoard) { // 6-i refers to each length of the ship
 				fmt.Print(pos, " ", dir, "\n")
@@ -601,7 +709,36 @@ func isDefeat(myBoard [boardSize][boardSize]int, enemyBoard [boardSize][boardSiz
 
 // functions related to UI
 func mainScene() { // main scene UI
-	printScript("Welcome to 'Battleship' game. This is main scene.\n", "'Battleship' 게임의 메인 화면입니다.\n")
+	printScript("Welcome to 'Battleship' game!\n", "'Battleship' 게임의 메인 화면입니다.\n")
+	fmt.Println("                                                                                                    ")
+	fmt.Println("                                                                      `                             ")
+	fmt.Println("                                                                     ./                             ")
+	fmt.Println("                                                          `-:-       .s                             ")
+	fmt.Println("                                                          dMMM.     -mM+                            ")
+	fmt.Println("                                                         `NMMMh     oyoo ````                       ")
+	fmt.Println("                                                         -MMMMM:   -y/:dyNMMy                       ")
+	fmt.Println("                `.....`   ```````                 -dy----oMMMMMm-mNNNNNMMMMMN:                      ")
+	fmt.Println("                `ohMyo/o/ `+yNhs++o            +oohMMNNMMMMMMMMMMMMMMMMMMMMMMs  `-..`               ")
+	fmt.Println("             `---ydyy-.----smdd/-----....----+dMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMy--+MMMN::-----..      ")
+	fmt.Println("             :hNMmhhNMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMd.      ")
+	fmt.Println("      smmmmmmmmMMNmmNMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMd`       ")
+	fmt.Println("      -NMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMm`        ")
+	fmt.Println("       .hMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM/         ")
+	fmt.Println("                                                                                                    ")
+	fmt.Println("                                                                                                    ")
+	fmt.Println("====================================================================================================")
+	fmt.Println("                                                                                                    ")
+	fmt.Println("    MMMMMMm      MMMM    MMMMMMMMM  MMMMMMMMM MMM      MMMMMMM   hNMMm    MMM  MMM  mMMM  MMMMMN ")
+	fmt.Println("    MMMM MMMN    MMMM    MMMMMMMMM  MMMMMMMMM MMM      MMMMMMM  MMMMMMMN  MMM  MMM  mMMM  MMM  MMM")
+	fmt.Println("    MMMM  MMM   MMMMMM      MMM        MMM    MMM      MMM     hMMMN      MMM  MMM  mMMM  MMM  MMN ")
+	fmt.Println("    MMMMdMMN    MMMMMM      MMM        MMM    MMM      MMMMMM   MMMMd     MMMMMMMM  mMMM  MMMNdMM")
+	fmt.Println("    MMMMMMMd   NMM  MMN     MMM        MMM    MMM      MMMMMM    dMMMMN   MMMMMMMM  mMMM  MMM ")
+	fmt.Println("    MMMM  MMm  MMMMMMMM     MMM        MMM    MMM      MMM          MMMM  MMM  MMM  mMMM  MMM")
+	fmt.Println("    MMMM  MMM MMMM  MMMM    MMM        MMM    MMM      MMM     dMMN NMMM  MMM  MMM  mMMM  MMM")
+	fmt.Println("    MMMM  MMM MMMM  MMMM    MMM        MMM    MMMMMMMM MMMhMMM dMMN+NMMM  MMM  MMM  mMMM  MMM")
+	fmt.Println("    MMMMNMMM  NMMM  MMMN    MMM        MMM    MMMMMMMM MMMMMMM  NMMMMMM   MMM  MMM  mMMM  MMM")
+	fmt.Println("                                                                                                    ")
+	fmt.Println("====================================================================================================")
 	//currentUser := getCurrentUser()
 	//fmt.Println("Number of current user: ", currentUser)
 }
