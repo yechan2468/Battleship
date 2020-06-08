@@ -1,6 +1,6 @@
 // Code for 'Battleship' game client
 // Written by Yechan Lee, 2020.04. -
-// Game version 0.0.0 (on development)
+// Game version 1.0.0
 // networks, UI/UX, design, etc. will be updated
 
 package main
@@ -84,7 +84,6 @@ func main() {
 	// checkTile()
 
 	// selectLanguage()
-
 	mainScene()
 	fmt.Println("Trying to connect to server...")
 	connection := connectToServer()
@@ -96,92 +95,114 @@ func main() {
 	myBoard = clearBoard(myBoard, oceanTile)
 	enemyBoard = clearBoard(enemyBoard, hiddenTile)
 
-	nickname = setNickname()
+	// set global variable 'nickname'
 	// if user enters [q], quit the game
-	if nickname == "q" || nickname == "Q" {
-		fmt.Println("Program terminated. ")
-		return
-	}
+	setNickname()
 
-	// arrange the fleets
-	printScript("\nWelcome, commander "+nickname+"! It's time for you to arrange our fleets and ready for battle. \n", "충성! 함선을 배치하고 전투를 준비하십시오.")
-	myBoard = getArrangement(myBoard)
+	for {
+		// arrange the fleets
+		printScript("\nWelcome, commander "+nickname+"! It's time for you to arrange our fleets and ready for battle. \n", "충성! 함선을 배치하고 전투를 준비하십시오.")
+		myBoard = getArrangement(myBoard)
 
-	// read continuously while program is executing
-	var isReady bool = false
-	var enemyReady bool = false
-	var myTurn bool = false
-	go readServer(connection, &myBoard, &enemyBoard, &isReady, &enemyReady, &myTurn)
+		// these variables manages game matching and game turn
+		var isReady bool = false
+		var enemyReady bool = false
+		var myTurn bool = false
 
-	for true {
-		// write 'i am ready. are you ready?'
-		// if response i am ready, game start
-		fmt.Print("Making match queue, please wait for another player")
-		for i := 0; i < 60; i++ { // wait for 60sec
-			time.Sleep(1 * time.Second)
-			writeServer("/r", connection, &myTurn) // myTurn value is changed here
-			isReady = true
-			if isReady && enemyReady {
-				break
-			} else {
-				fmt.Print(".")
-				if i >= 59 {
-					os.Exit(1)
+		// read server continuously while program is executing
+		go readServer(connection, &myBoard, &enemyBoard, &isReady, &enemyReady, &myTurn)
+
+		var restartGame bool = true
+		for restartGame == true { // if user decides to restart game, this loop is continued
+			// write 'i am ready. are you ready?'
+			// if response i am ready, game start
+			fmt.Print("Making match queue, please wait for another player")
+			for i := 0; i < 60; i++ { // wait for 60sec
+				time.Sleep(1 * time.Second)
+				writeServer("/r", connection, &myTurn) // myTurn value is changed here
+				isReady = true
+				if isReady && enemyReady {
+					break
+				} else {
+					fmt.Print(".")
+					if i >= 59 {
+						os.Exit(1)
+					}
+					continue
 				}
-				continue
 			}
-		}
-		fmt.Print("\n")
+			fmt.Print("\n")
 
-		// make match and start game
-		fmt.Println("Found Match!")
-		fmt.Print("\n")
+			// make match and start game
+			fmt.Println("Found Match!")
+			fmt.Print("\n")
 
-		// keyboard shortcuts notice
-		writeServer("/h", connection, &myTurn)
-		fmt.Print("You can get help on keyboard shortcuts by typing \"/h\".\n")
+			// keyboard shortcuts notice
+			writeServer("/h", connection, &myTurn)
+			fmt.Print("You can get help on keyboard shortcuts by typing \"/h\".\n")
 
-		// turn notice
-		// if myTurn {
-		// 	fmt.Println("It is your turn! Attack the enemy's territory using command \"/a\".")
-		// } else {
-		// 	fmt.Println("It's enemy's turn! Please wait for seconds.")
-		// }
-
-		// in-game
-		var destroyedCheck [5]bool // checks if carrier, battleship, cruiser, submarine, destroyer is destroyed. if destroyed, the element in bool array is "true".
-		for {                      // continuously ready input for chatting or command
-			var message string
-			in := bufio.NewReader(os.Stdin)
-			message, err := in.ReadString('\n')
-			if err != nil {
-				fmt.Println("Failed to read your command. Please try again.")
-				continue
+			// turn notice
+			if myTurn == true {
+				fmt.Println("It is your turn! Attack the enemy's territory using command \"/a\".")
+			} else {
+				fmt.Println("It's enemy's turn! Please wait for seconds.")
 			}
-			writeServer(message, connection, &myTurn)
 
-			// If my fleets are destroyed, notice to enemy
-			result := isDestoyed(&myBoard)
-			for idx, count := range result {
-				if count == 0 {
-					if destroyedCheck[idx] == false { // if not noticed so far
-						tmp := strconv.Itoa(idx)
-						writeServer("/"+tmp, connection, &myTurn)
-						destroyedCheck[idx] = true // noticed
+			// in-game
+			var destroyedCheck [5]bool // checks if carrier, battleship, cruiser, submarine, destroyer is destroyed. if destroyed, the element in bool array is "true".
+			for {                      // continuously ready input for chatting or command
+				message := getUserInput()
+				writeServer(message, connection, &myTurn)
+
+				// If my fleets are destroyed, notice to enemy
+				result := isDestoyed(&myBoard)
+				for idx, count := range result {
+					if count == 0 {
+						if destroyedCheck[idx] == false { // if not noticed so far
+							tmp := strconv.Itoa(idx)
+							writeServer("/"+tmp, connection, &myTurn)
+							destroyedCheck[idx] = true // noticed
+						}
+					}
+				}
+
+				// quit game / restart game
+				winner := isDefeat(myBoard, enemyBoard) // checks winner, at every end of each player's turn. return value -1: no winner yet; 0: I win; 1: Enemy win
+				if winner >= 0 {
+					declareWinner(winner) // prints who's the winner of the game
+
+					// get user input (restart / quit game)
+					userInput := getUserInput()
+
+					switch userInput[0] { // if userInput == q or Q, quit game; otherwise restart game
+					case 'q', 'Q':
+						fmt.Println("Thank you for playing!")
+						restartGame = false
+					case 'r', 'R':
+						fallthrough
+					default:
+						// refresh data
+						myBoard = clearBoard(myBoard, oceanTile)
+						enemyBoard = clearBoard(enemyBoard, hiddenTile)
+
+						isReady = false
+						enemyReady = false
+						myTurn = false
+
+						// arrange the fleets
+						printScript("\nWelcome, commander "+nickname+"! It's time for you to arrange our fleets and ready for battle. \n", "충성! 함선을 배치하고 전투를 준비하십시오.")
+						myBoard = getArrangement(myBoard)
+
+						// restart game
+						restartGame = true
 					}
 				}
 			}
-
-			// quit game
-			winner := isDefeat(myBoard, enemyBoard) // checks winner, at every end of each player's turn. return value -1: no winner yet; 0: I win; 1: Enemy win
-			if winner >= 0 {
-				declareWinner(winner)
-			}
-			time.Sleep(10 * time.Second)
 		}
 	}
+
 }
-func isDestoyed(myBoard *[boardSize][boardSize]int) [5]int {
+func isDestoyed(pMyBoard *[boardSize][boardSize]int) [5]int {
 	var (
 		carrierCount    int = 0
 		battleshipCount int = 0
@@ -189,10 +210,9 @@ func isDestoyed(myBoard *[boardSize][boardSize]int) [5]int {
 		submarineCount  int = 0
 		destoryerCount  int = 0
 	)
-
 	for i := 0; i < boardSize; i++ {
 		for j := 0; j < boardSize; j++ {
-			switch (*myBoard)[i][j] {
+			switch (*pMyBoard)[i][j] {
 			case carrierTile:
 				carrierCount++
 			case battleshipTile:
@@ -216,8 +236,8 @@ func isDestoyed(myBoard *[boardSize][boardSize]int) [5]int {
 
 // functions related to network
 func connectToServer() (connection net.Conn) { // connect to relay server
-	connection, err := net.Dial("tcp", "121.159.177.222:8200")
-	//connection, err := net.Dial("tcp", "127.0.0.1:8200")
+	//connection, err := net.Dial("tcp", "121.159.177.222:8200")
+	connection, err := net.Dial("tcp", "127.0.0.1:8200") // for debugging
 
 	if err != nil {
 		fmt.Println("Failed to connect to server: ", err)
@@ -455,11 +475,11 @@ func writeServer(message string, connection net.Conn, pMyTurn *bool) { // * out 
 
 	encoderBuffer.Reset()
 }
-func getCurrentUser() (currentUser int) { // *
+func getCurrentUser() (currentUser int) { // not implemented
 	currentUser = 0
 	return
 }
-func setNickname() (nickname string) { // get nickname and save it into global variable 'nickname'
+func setNickname() { // get nickname and save it into global variable 'nickname'
 	printScript("Enter your nickname to continue, Enter [q] to quit. \n", "닉네임을 입력하세요. [q] 버튼을 누르면 종료됩니다.\n")
 	fmt.Print(">> ")
 
@@ -469,10 +489,14 @@ func setNickname() (nickname string) { // get nickname and save it into global v
 		nickname = "nickname"
 	}
 	nickname = line
-	nickname = nickname[0 : len(nickname)-1]
+	nickname = nickname[0 : len(nickname)-1] // strips "\n"
+
+	if nickname == "q" || nickname == "Q" {
+		fmt.Println("Program terminated. ")
+		os.Exit(1)
+	}
 
 	fmt.Print(nickname, "\n")
-	return
 }
 
 // functions related to gameboard
@@ -556,9 +580,9 @@ func convertToUnicode(tileNum int) (unicode string) { // converts tile number ->
 	}
 	return
 }
-func isArrangeInputValid(row int, col int, dir string, shipSize int, myBoard [boardSize][boardSize]int) (validity bool) {
+func isArrangeInputValid(row int, col int, dir byte, shipSize int, myBoard [boardSize][boardSize]int) (validity bool) {
 	validity = false
-	switch dir[0] {
+	switch dir {
 	case 'v', 'V':
 		if (0 <= row) && (row <= boardSize-shipSize+1) {
 			if (0 <= col) && (col <= boardSize) {
@@ -599,8 +623,8 @@ func isArrangeInputValid(row int, col int, dir string, shipSize int, myBoard [bo
 		return
 	}
 }
-func arrangeShip(row int, col int, dir string, tileNum int, myBoard [boardSize][boardSize]int) [boardSize][boardSize]int {
-	switch dir[0] {
+func arrangeShip(row int, col int, dir byte, tileNum int, myBoard [boardSize][boardSize]int) [boardSize][boardSize]int {
+	switch dir {
 	case 'v', 'V':
 		for i := row; i < row+tileNum; i++ {
 			myBoard[i][col] = tileNum
@@ -615,6 +639,7 @@ func arrangeShip(row int, col int, dir string, tileNum int, myBoard [boardSize][
 	return myBoard
 }
 func getArrangement(myBoard [boardSize][boardSize]int) [boardSize][boardSize]int {
+	// how the arrangement is made
 	/*
 		There are 5 kinds of ships: Carrier, Battleship, Cruiser, Submarine, and destroyer.
 		and they respectively have 6*1, 5*1, 4*1, 3*1, 2*1 size.
@@ -633,10 +658,9 @@ func getArrangement(myBoard [boardSize][boardSize]int) [boardSize][boardSize]int
 	showBoard(myBoard, enemyBoard)
 	printLine(doubleLine, 40)
 	printScript(
-		" How to arrange your fleets:\n  1. Select starting point of the fleet.\n  2. Select whether you arrange it horizontally[h] or vertically[v].\n Examples: if you want to put carrier at A1 - A6, type in [A1 h]\n", "함선 배치 방법:\n  1. 뱃머리의 위치를 입력하십시오.\n  2. 가로[h]/세로[v]를 입력하십시오.\n 예시: 항공모함을 A1 ~ A6에 배치하려 한다면, [A1 h]을 입력하십시오.\n")
+		" How to arrange your fleets:\n  1. Select starting point of the fleet.\n  2. Select whether you arrange it horizontally[h] or vertically[v].\n Examples: if you want to put carrier at A1 - A6, type in [a1 h]\n  If you want to quit game, type in [q]", "함선 배치 방법:\n  1. 뱃머리의 위치를 입력하십시오.\n  2. 가로[h]/세로[v]를 입력하십시오.\n 예시: 항공모함을 A1 ~ A6에 배치하려 한다면, [A1 h]을 입력하십시오.\n")
 	printLine(doubleLine, 40)
 
-	var pos, dir string
 	var shipList [5]string = [5]string{"destroyer", "submarine", "cruiser", "battleship", "carrier"}
 	var krShipList [5]string = [5]string{"구축함", "잠수함", "순양함", "전함", "항공모함"}
 
@@ -644,13 +668,42 @@ ARRANGE:
 	for true {
 		for i := 0; i < 5; { // arrange ships by orders
 			printScript("Arrange your "+shipList[4-i]+": (length: "+(string('0'+6-i))+")\n>> ", "Arrange your "+krShipList[4-i]+": \n>> ")
-			fmt.Scan(&pos, &dir)
-			row := int(pos[0]) - 'A'        // row index starting from 0
-			col, _ := strconv.Atoi(pos[1:]) // column index starting from 0
-			col--
+			userInput := getUserInput()
+			if userInput == "q" || userInput == "Q" {
+				fmt.Println("Thanks for playing!")
+				os.Exit(1)
+			}
+
+			var row, col int
+			// get row index
+			rowInput := userInput[0]
+			if rowInput > 'a' && rowInput < 'z' {
+				row = int(rowInput) - 'a' // row index(integer) starting from 0
+			} else if rowInput > 'A' && rowInput < 'Z' {
+				row = int(rowInput) - 'A' // row index(integer) starting from 0
+			} else {
+				// go back
+			}
+
+			// get column index
+			colInput := userInput[1]
+			col, _ = strconv.Atoi(string(colInput)) // column index(integer) starting from 0
+			if !(col >= 0 && col <= boardSize) {
+				// go back
+			}
+
+			// get direction
+			userInput = userInput[2:len(userInput)]
+			// strip left side white space
+			tmp := userInput[0]
+			for tmp == ' ' {
+				userInput = userInput[1:len(userInput)]
+				tmp = userInput[0]
+			}
+			dir := tmp
 
 			if isArrangeInputValid(row, col, dir, 6-i, myBoard) { // 6-i refers to each length of the ship
-				fmt.Print(pos, " ", dir, "\n")
+				fmt.Print(rowInput, colInput, " ", dir, "\n")
 				myBoard = arrangeShip(row, col, dir, 6-i, myBoard) // 6-i refers to tile number of the ship
 				showBoard(myBoard, enemyBoard)
 				i++
@@ -660,8 +713,7 @@ ARRANGE:
 		}
 
 		printScript("Are you sure with the arrangement? confirm: [y] / undo: [n]\n>> ", "배치가 완료되었습니까? 확인: [y] / 취소: [n]")
-		var tmp string
-		fmt.Scan(&tmp)
+		tmp := getUserInput()
 
 		switch tmp[0] { // user selects y/n
 		case 'y', 'Y':
@@ -706,10 +758,37 @@ func isDefeat(myBoard [boardSize][boardSize]int, enemyBoard [boardSize][boardSiz
 		return -1
 	}
 }
+func getUserInput() (userInput string) {
+	for true { // if there's no error in user input data, break;
+		in := bufio.NewReader(os.Stdin)
+		line, err := in.ReadString('\n')
+		if err != nil {
+			fmt.Println("An error occurred while getting your input; Please re-enter.")
+			continue // go back and request input again
+		} else {
+			line = line[0 : len(line)-1] // strips "\n"
+
+			// strip white spaces from line (left)
+			tmp := userInput[0]
+			for tmp == ' ' {
+				userInput = userInput[1:len(userInput)]
+				tmp = userInput[0]
+			}
+			// strip white spaces from line (right)
+			tmp = userInput[len(userInput)-1]
+			for tmp == ' ' {
+				userInput = userInput[0 : len(userInput)-1]
+				tmp = userInput[len(userInput)-1]
+			}
+
+			userInput = line
+		}
+	}
+	return
+}
 
 // functions related to UI
 func mainScene() { // main scene UI
-	printScript("Welcome to 'Battleship' game!\n", "'Battleship' 게임의 메인 화면입니다.\n")
 	fmt.Println("                                                                                                    ")
 	fmt.Println("                                                                      `                             ")
 	fmt.Println("                                                                     ./                             ")
@@ -732,20 +811,21 @@ func mainScene() { // main scene UI
 	fmt.Println("    MMMM MMMN    MMMM    MMMMMMMMM  MMMMMMMMM MMM      MMMMMMM  MMMMMMMN  MMM  MMM  mMMM  MMM  MMM")
 	fmt.Println("    MMMM  MMM   MMMMMM      MMM        MMM    MMM      MMM     hMMMN      MMM  MMM  mMMM  MMM  MMN ")
 	fmt.Println("    MMMMdMMN    MMMMMM      MMM        MMM    MMM      MMMMMM   MMMMd     MMMMMMMM  mMMM  MMMNdMM")
-	fmt.Println("    MMMMMMMd   NMM  MMN     MMM        MMM    MMM      MMMMMM    dMMMMN   MMMMMMMM  mMMM  MMM ")
+	fmt.Println("    MMMMMMMd   NMM  MMN     MMM        MMM    MMM      MMMMMM    dMMMMN   MMMMMMMM  mMMM  MMMMM")
 	fmt.Println("    MMMM  MMm  MMMMMMMM     MMM        MMM    MMM      MMM          MMMM  MMM  MMM  mMMM  MMM")
 	fmt.Println("    MMMM  MMM MMMM  MMMM    MMM        MMM    MMM      MMM     dMMN NMMM  MMM  MMM  mMMM  MMM")
 	fmt.Println("    MMMM  MMM MMMM  MMMM    MMM        MMM    MMMMMMMM MMMhMMM dMMN+NMMM  MMM  MMM  mMMM  MMM")
 	fmt.Println("    MMMMNMMM  NMMM  MMMN    MMM        MMM    MMMMMMMM MMMMMMM  NMMMMMM   MMM  MMM  mMMM  MMM")
 	fmt.Println("                                                                                                    ")
 	fmt.Println("====================================================================================================")
+	printScript("Welcome to 'Battleship' game!\n", "'Battleship' 게임의 메인 화면입니다.\n")
 	//currentUser := getCurrentUser()
 	//fmt.Println("Number of current user: ", currentUser)
 }
 func selectLanguage() { // needs more development
 	fmt.Print("Select language: [en/kr]\n")
 	fmt.Print(">> ")
-	fmt.Scan(&language)
+	language = getUserInput()
 	if !(language == "kr" || language == "en") {
 		language = "en"
 	}
