@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
+	"time"
 )
 
 var (
@@ -36,19 +38,19 @@ func main() {
 	// get local IP address
 	var currentIP string
 	addrs, err := net.InterfaceAddrs()
-        if err != nil {
-                fmt.Println(err)
-        }
-        for _, address := range addrs {
-            // check the address type and if it is not a loopback the display it
-            // = GET LOCAL IP ADDRESS
-            if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-                 if ipnet.IP.To4() != nil {
-                     currentIP = ipnet.IP.String()
-                    }
-            }
+	if err != nil {
+		fmt.Println(err)
+	}
+	for _, address := range addrs {
+		// check the address type and if it is not a loopback the display it
+		// = GET LOCAL IP ADDRESS
+		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				currentIP = ipnet.IP.String()
+			}
 		}
-	fmt.Println("Network protocol: \"tcp\", Address: "+currentIP+"\nListening: \":8200\"")
+	}
+	fmt.Println("Network protocol: \"tcp\", Address: " + currentIP + "\nListening: \":8200\"")
 	fmt.Print("\n")
 
 	defer listener.Close()
@@ -89,7 +91,6 @@ func closeConnection(connection net.Conn, currentUsers map[net.Conn]net.Addr, ad
 
 	connection.Close()
 }
-
 func requestHandler(connection net.Conn, currentUsers map[net.Conn]net.Addr, readyUsers map[net.Conn]net.Addr) {
 	// received data is stored in it
 	data := make([]byte, 256)
@@ -98,7 +99,7 @@ func requestHandler(connection net.Conn, currentUsers map[net.Conn]net.Addr, rea
 		// read message
 		_, err := connection.Read(data)
 		if err != nil { // if tcp connection lost
-			fmt.Println("Failed to read data: ", err) 
+			fmt.Println("Failed to read data: ", err)
 			closeConnection(connection, currentUsers, connection.RemoteAddr())
 			return
 		}
@@ -106,7 +107,8 @@ func requestHandler(connection net.Conn, currentUsers map[net.Conn]net.Addr, rea
 		// reply message
 		for conn := range currentUsers {
 			_, err = conn.Write(data)
-			fmt.Println(connection, "Passed the message to ", conn)
+			fmt.Print("[" + (strconv.Itoa(time.Now().Hour()) + ":" + strconv.Itoa(time.Now().Minute()) + ":" + strconv.Itoa(time.Now().Second()) + "'" + strconv.Itoa(time.Now().Nanosecond())) + "] ")
+			fmt.Print(currentUsers[connection], " -> ", currentUsers[conn], "\n")
 			if err != nil {
 				fmt.Println("Failed to write data: ", err)
 				return
@@ -114,21 +116,20 @@ func requestHandler(connection net.Conn, currentUsers map[net.Conn]net.Addr, rea
 		}
 	}
 }
-
 func userCommand(currentUsers map[net.Conn]net.Addr) {
 	for {
 		var cmd string
 		fmt.Scan(&cmd)
-		if cmd == "/help" {
+		if cmd == "help" {
 			fmt.Println("--------------------------------------------------")
-			fmt.Println("/exit: quit")
-			fmt.Println("/user: print current user information")
-			fmt.Println("/refresh: delete all the data and restart")
+			fmt.Println("exit: quit")
+			fmt.Println("user: print current user information")
+			fmt.Println("refresh: delete all the data and restart")
 			fmt.Println("--------------------------------------------------")
-		} else if cmd == "/exit" {
+		} else if cmd == "exit" {
 			fmt.Println("server shut down.")
 			os.Exit(1)
-		} else if cmd == "/user" {
+		} else if cmd == "user" {
 			fmt.Println("--------------------------------------------------")
 			fmt.Print("Number of user(s): ", numCurrentUser, "\n")
 			fmt.Println("Index\tNetwork Connection\tAddress")
@@ -141,7 +142,7 @@ func userCommand(currentUsers map[net.Conn]net.Addr) {
 				fmt.Println("NULL\tNULL\t\t\tNULL")
 			}
 			fmt.Println("--------------------------------------------------")
-		} else if cmd == "/refresh" {
+		} else if cmd == "refresh" {
 			for conn, addr := range currentUsers {
 				closeConnection(conn, currentUsers, addr)
 			}
