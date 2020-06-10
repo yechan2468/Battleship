@@ -61,6 +61,7 @@ func main() {
 			fmt.Println("Failed to tcp Accept(): ", err)
 			continue
 		} else {
+			fmt.Print("[" + (strconv.Itoa(time.Now().Hour()) + ":" + strconv.Itoa(time.Now().Minute()) + ":" + strconv.Itoa(time.Now().Second()) + "'" + strconv.Itoa(time.Now().Nanosecond())) + "] ")
 			fmt.Print(connection.RemoteAddr())
 			fmt.Print(" joined the server.\n")
 			currentUsers[connection] = connection.RemoteAddr()
@@ -77,6 +78,7 @@ func closeConnection(connection net.Conn, currentUsers map[net.Conn]net.Addr, ad
 	foundUser = false
 	for conn, addr := range currentUsers { // find address index in 'currentUsers' map
 		if addr == address {
+			fmt.Print("[" + (strconv.Itoa(time.Now().Hour()) + ":" + strconv.Itoa(time.Now().Minute()) + ":" + strconv.Itoa(time.Now().Second()) + "'" + strconv.Itoa(time.Now().Nanosecond())) + "] ")
 			fmt.Println(addr, "left the server.")
 			delete(currentUsers, conn)
 			foundUser = true
@@ -125,6 +127,7 @@ func userCommand(currentUsers map[net.Conn]net.Addr) {
 			fmt.Println("exit: quit")
 			fmt.Println("user: print current user information")
 			fmt.Println("refresh: delete all the data and restart")
+			fmt.Println("time: get current time")
 			fmt.Println("--------------------------------------------------")
 		} else if cmd == "exit" {
 			fmt.Println("server shut down.")
@@ -146,6 +149,8 @@ func userCommand(currentUsers map[net.Conn]net.Addr) {
 			for conn, addr := range currentUsers {
 				closeConnection(conn, currentUsers, addr)
 			}
+		} else if cmd == "time" {
+			fmt.Println("Current time: [" + (strconv.Itoa(time.Now().Hour()) + ":" + strconv.Itoa(time.Now().Minute()) + ":" + strconv.Itoa(time.Now().Second()) + "'" + strconv.Itoa(time.Now().Nanosecond())) + "] ")
 		} else {
 			fmt.Println("Failed to find command: ", cmd)
 		}

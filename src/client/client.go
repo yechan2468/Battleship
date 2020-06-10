@@ -295,13 +295,10 @@ func requestHandler(connection net.Conn, message Message, pMyBoard *[boardSize][
 				tile = hitTile // my territory, hit
 				isAttackSucceed = "1"
 				updateBoard(pMyBoard, row, col, tile)
-				showBoard(*pMyBoard, *pEnemyBoard)
-				printScript("Hit!\n", "")
 			} else {
 				tile = hitTile // my territory, missed
 				updateBoard(pMyBoard, row, col, tile)
 				showBoard(*pMyBoard, *pEnemyBoard)
-				printScript("Missed!\n", "")
 			}
 
 			// If my fleets are destroyed, notice to enemy
@@ -327,6 +324,13 @@ func requestHandler(connection net.Conn, message Message, pMyBoard *[boardSize][
 						}
 						fmt.Print(" Sunk!\n")
 						fmt.Println("------------------------------")
+
+						showBoard(*pMyBoard, *pEnemyBoard)
+						if isAttackSucceed == "1" {
+							printScript("Hit!\n", "")
+						} else {
+							printScript("Missed!\n", "")
+						}
 
 						writeServer("/"+tmp, connection, pMyTurn)
 						(*pDestroyedCheck)[idx] = true // noticed
@@ -384,31 +388,26 @@ func requestHandler(connection net.Conn, message Message, pMyBoard *[boardSize][
 		case '!': // if enemy quit game
 			fmt.Println("Enemy Declared Surrender!")
 			showWinner(0)
-			time.Sleep(10 * time.Second)
+			time.Sleep(3 * time.Second)
 			os.Exit(1)
 		// below: enemy fleet sunk notice
 		case '0':
-			time.Sleep(500 * time.Millisecond)
 			fmt.Println("------------------------------")
 			fmt.Println("Enemy Carrier Sunk!")
 			fmt.Println("------------------------------")
 		case '1':
-			time.Sleep(500 * time.Millisecond)
 			fmt.Println("------------------------------")
 			fmt.Println("Enemy Battleship Sunk!")
 			fmt.Println("------------------------------")
 		case '2':
-			time.Sleep(500 * time.Millisecond)
 			fmt.Println("------------------------------")
 			fmt.Println("Enemy Cruiser Sunk!")
 			fmt.Println("------------------------------")
 		case '3':
-			time.Sleep(500 * time.Millisecond)
 			fmt.Println("------------------------------")
 			fmt.Println("Enemy Submarine Sunk!")
 			fmt.Println("------------------------------")
 		case '4':
-			time.Sleep(500 * time.Millisecond)
 			fmt.Println("------------------------------")
 			fmt.Println("Enemy Destroyer Sunk!")
 			fmt.Println("------------------------------")
