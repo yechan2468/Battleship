@@ -198,8 +198,8 @@ func main() {
 // FUNCTIONS
 // functions related to network
 func connectToServer() (connection net.Conn) { // connect to relay server
-	//connection, err := net.Dial("tcp", "121.159.177.222:8200")
-	connection, err := net.Dial("tcp", "127.0.0.1:8200") // for debugging
+	connection, err := net.Dial("tcp", "121.159.177.222:8200")
+	// connection, err := net.Dial("tcp", "127.0.0.1:8200") // for debugging
 
 	if err != nil {
 		fmt.Println("Failed to connect to server: ", err)
