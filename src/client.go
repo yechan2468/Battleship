@@ -44,7 +44,7 @@ type (
 )
 
 const (
-	gameVersion string = "0.0.0"
+	gameVersion string = "1.0.0"
 
 	// UI
 	boardSize int = 10
@@ -84,14 +84,15 @@ func main() {
 	// checkTile()
 
 	// selectLanguage()
-	mainScene()
+	mainScene() // print main scene
 	fmt.Println("Trying to connect to server...")
-	connection := connectToServer()
+	connection := connectToServer() // connect to server and get connection info
 	defer connection.Close()
 
 	// make gameboard
 	var myBoard [boardSize][boardSize]int
 	var enemyBoard [boardSize][boardSize]int
+	// reset gameboard
 	myBoard = clearBoard(myBoard, oceanTile)
 	enemyBoard = clearBoard(enemyBoard, hiddenTile)
 
@@ -119,20 +120,34 @@ func main() {
 		// write 'i am ready. are you ready?'
 		// if response i am ready, game start
 		fmt.Print("Making match queue, please wait for another player")
-		for i := 0; i < 60; i++ { // wait for 60sec
-			time.Sleep(1 * time.Second)
-			writeServer("/r", connection, &myTurn) // myTurn value is changed here
-			isReady = true
-			if isReady && enemyReady {
-				break
-			} else {
-				fmt.Print(".")
-				if i >= 59 {
-					os.Exit(1)
+		rematch := true
+		for rematch {
+			for i := 0; i < 30; i++ { // wait for 30sec
+				time.Sleep(1 * time.Second)
+				writeServer("/r", connection, &myTurn) // 'myTurn' value is changed here
+
+				isReady = true
+				if isReady && enemyReady {
+					rematch = false
+					break
+				} else {
+					if i%3 == 0 {
+						fmt.Print(".")
+					}
+					if i >= 29 {
+						fmt.Println("Do you want to rematch or shut down? [r] rematch / [q] quit game")
+						message := getUserInput()
+						if message[0] == 'q' || message[0] == 'Q' {
+							os.Exit(1)
+						} else {
+							rematch = true // continue to 'for rematch'
+						}
+					}
 				}
-				continue
 			}
+
 		}
+
 		fmt.Print("\n")
 
 		// make match and start game
@@ -144,7 +159,8 @@ func main() {
 		fmt.Print("You can get help on keyboard shortcuts by typing \"/h\".\n")
 
 		// turn notice
-		// if myTurn == true {
+		// fmt.Println(myTurn)
+		// if myTurn {
 		// 	fmt.Println("It is your turn! Attack the enemy's territory using command \"/a\".")
 		// } else {
 		// 	fmt.Println("It's enemy's turn! Please wait for seconds.")
@@ -168,7 +184,7 @@ func main() {
 				case 'q', 'Q':
 					fmt.Println("Thank you for playing!")
 					restartGame = false
-					break
+					break // quit game
 				case 'r', 'R':
 					fallthrough
 				default:
@@ -186,7 +202,7 @@ func main() {
 
 					// restart game
 					restartGame = true
-					break
+					break // continue to 'for restartGame == true'
 				}
 			}
 		}
@@ -201,13 +217,14 @@ func connectToServer() (connection net.Conn) { // connect to relay server
 	connection, err := net.Dial("tcp", "121.159.177.222:8200")
 	// connection, err := net.Dial("tcp", "127.0.0.1:8200") // for debugging
 
-	if err != nil {
+	if err != nil { // if failed to connect to server
 		fmt.Println("Failed to connect to server: ", err)
 		fmt.Println("Please make sure that the server is available now. If so, please try again.")
 		fmt.Println("Battleship client shut down.")
 		time.Sleep(5 * time.Second)
 		return
 	}
+	// if connected to server
 	fmt.Println("Successfully connected to server.")
 	return
 }
@@ -227,7 +244,7 @@ func readServer(connection net.Conn, pMyBoard *[boardSize][boardSize]int, pEnemy
 
 		// read message
 		n, err := connection.Read(data)
-		if err != nil {
+		if err != nil { // if failed to read message, print error message and shut down the program
 			fmt.Println("Failed to read message from server: ", err)
 			fmt.Println("Server connection lost.")
 			time.Sleep(5 * time.Second)
@@ -237,7 +254,7 @@ func readServer(connection net.Conn, pMyBoard *[boardSize][boardSize]int, pEnemy
 		// decode message
 		if n > 0 {
 			message = Message{}
-			decoderBuffer.Write(data[:n])
+			decoderBuffer.Write(data[:n]) // store decoded message to 'data'
 			err = decoder.Decode(&message)
 			if err != nil {
 				fmt.Println("Failed to decode message from client:", err)
@@ -249,6 +266,7 @@ func readServer(connection net.Conn, pMyBoard *[boardSize][boardSize]int, pEnemy
 		decoderBuffer.Reset()
 
 		// ignore if the message is sent by myself
+		// the relay server receives the messages and passes them to everybody who are connected to server
 		if message.Header.Nickname == nickname {
 			continue
 		}
@@ -258,10 +276,10 @@ func readServer(connection net.Conn, pMyBoard *[boardSize][boardSize]int, pEnemy
 	}
 }
 func requestHandler(connection net.Conn, message Message, pMyBoard *[boardSize][boardSize]int, pEnemyBoard *[boardSize][boardSize]int, pIsReady *bool, pEnemyReady *bool, pMyTurn *bool, pDestroyedCheck *[5]bool) {
-	if message.Header.MessageType == "chat" {
+	if message.Header.MessageType == "chat" { //if message type is chat
 		fmt.Print("[", (strconv.Itoa(time.Now().Hour()) + ":" + strconv.Itoa(time.Now().Minute()) + ":" + strconv.Itoa(time.Now().Second())))
 		fmt.Print("] ", message.Header.Nickname, ": ", message.Body.Content, "\n")
-	} else if message.Header.MessageType == "command" {
+	} else if message.Header.MessageType == "command" { //if message type is command
 		// var replyMessage string
 		switch message.Body.Content[0] {
 		case 'a': // if enemy attacked my territory
@@ -288,26 +306,28 @@ func requestHandler(connection net.Conn, message Message, pMyBoard *[boardSize][
 			tmp, _ := strconv.Atoi(colInput)
 			col = tmp - 1 // column in integer value starting from 0
 
+			// check if enemy succeeded to hit my ship
 			isAttackSucceed := "0"
 			var tile int
 			printScript("The enemy shot my territory "+message.Body.Content[2:4]+"; \n", "")
-			if checkAttackSucceed(row, col, *(pMyBoard)) {
+			if checkAttackSucceed(row, col, *(pMyBoard)) { // if attack succeeded
 				tile = hitTile // my territory, hit
 				isAttackSucceed = "1"
-				updateBoard(pMyBoard, row, col, tile)
-			} else {
+				updateBoard(pMyBoard, row, col, tile) // update my board
+			} else { // if attack failed
 				tile = hitTile // my territory, missed
 				updateBoard(pMyBoard, row, col, tile)
-				showBoard(*pMyBoard, *pEnemyBoard)
+				showBoard(*pMyBoard, *pEnemyBoard) // update my board
 			}
 
-			// If my fleets are destroyed, notice to enemy
+			// If one of my fleets are completely destroyed, notice to me and enemy
 			result := isDestoyed(pMyBoard)
 			for idx, count := range result {
 				if count == 0 {
 					if (*pDestroyedCheck)[idx] == false { // if not noticed so far
 						tmp := strconv.Itoa(idx)
 
+						// print that my fleets are destroyed
 						fmt.Println("------------------------------")
 						fmt.Print("My ")
 						switch idx {
@@ -332,21 +352,28 @@ func requestHandler(connection net.Conn, message Message, pMyBoard *[boardSize][
 							printScript("Missed!\n", "")
 						}
 
+						// notice to enemy
 						writeServer("/"+tmp, connection, pMyTurn)
 						(*pDestroyedCheck)[idx] = true // noticed
 					}
 				}
 			}
 
+			// let enemy know that the attack was succedded/failed
+
 			// writes "/? 1rc" when attack succeeded, else "/? 0rc"
 			// rc stands for integer value of row and column
 			writeServer("/? "+isAttackSucceed+strconv.Itoa(row)+strconv.Itoa(col), connection, pMyTurn)
 
+			// enemy attacked; so my turn comes
 			*pMyTurn = true // bool myTurn is set false by default
 			fmt.Println("")
 			fmt.Println("[Your Turn]")
 
-		case '?': // is enemy attack succeed - attack response handling
+		case '?':
+			// is enemy attack succeed - attack response handling
+			// if I attack using /a command, the enemy will send /? message in response, to check whether the attack was succeeded
+
 			// return attack coordinate, attack succeeded yes/no
 			isAttackSucceed := int(message.Body.Content[2] - '0') // 0 or 1 (int)
 			var row int = int(message.Body.Content[3] - '0')      // row in integer value
@@ -363,11 +390,13 @@ func requestHandler(connection net.Conn, message Message, pMyBoard *[boardSize][
 			}
 			*pMyTurn = false
 
+			// I attacked earlier, and got to know whether my attack succeeded.
+			// so enemy's turn comes
 			fmt.Println("")
 			fmt.Println("[Enemy's Turn]")
 
-		case 'r': // if enemy ready
-			// check whether i am ready; if ready, start game
+		case 'r': // if enemy sent "I am ready" sign
+			// check whether i am ready; if so, start game
 			*pEnemyReady = true
 			if *pIsReady && *pEnemyReady {
 				turnInt := rand.Int() % 2 // turnInt[0,1] is used to determine who will start the first turn.
@@ -378,8 +407,10 @@ func requestHandler(connection net.Conn, message Message, pMyBoard *[boardSize][
 				}
 				writeServer("/R "+strconv.Itoa(turnInt), connection, pMyTurn)
 			}
-		case 'R': // I ready and wait->Enemy ready-> confirm sign; decide first turn
+		case 'R': // I ready and wait->Enemy ready-> confirm sign
 			*pEnemyReady = true
+
+			// decide who will do the first turn
 			if message.Body.Content[2] == '0' { // if enemy starts later
 				*pMyTurn = true // I start the first turn
 			} else {
@@ -528,7 +559,7 @@ func getCurrentUser() (currentUser int) { // not implemented
 }
 
 // functions related to gameboard
-func checkAttackSucceed(row int, col int, myBoard [boardSize][boardSize]int) bool {
+func checkAttackSucceed(row int, col int, myBoard [boardSize][boardSize]int) bool { // check if ship exist in given coordinate(row, column)
 	if (myBoard[row][col] == oceanTile) || (myBoard[row][col] == hitTile) {
 		return false
 	} else {
@@ -544,6 +575,7 @@ func clearBoard(board [boardSize][boardSize]int, tileNum int) [boardSize][boardS
 	return board
 }
 func showBoard(myBoard [boardSize][boardSize]int, enemyBoard [boardSize][boardSize]int) { // boards consist of integers -> convert them to unicode -> print
+	// integer to unicode transformation tables are defined in 'const ()', above the main function
 	println("======================================================================")
 	switch language {
 	case "kr":
@@ -579,7 +611,7 @@ func showBoard(myBoard [boardSize][boardSize]int, enemyBoard [boardSize][boardSi
 	}
 	println("======================================================================")
 }
-func isArrangeInputValid(row int, col int, dir byte, shipSize int, myBoard [boardSize][boardSize]int) (validity bool) {
+func isArrangeInputValid(row int, col int, dir byte, shipSize int, myBoard [boardSize][boardSize]int) (validity bool) { // check if arrangement request valid.
 	validity = false
 	switch dir {
 	case 'v', 'V':
@@ -637,7 +669,7 @@ func arrangeShip(row int, col int, dir byte, tileNum int, myBoard [boardSize][bo
 	}
 	return myBoard
 }
-func getArrangement(myBoard [boardSize][boardSize]int) [boardSize][boardSize]int {
+func getArrangement(myBoard [boardSize][boardSize]int) [boardSize][boardSize]int { // get arrangement information from user
 	// how the arrangement is made
 	/*
 		There are 5 kinds of ships: Carrier, Battleship, Cruiser, Submarine, and destroyer.
@@ -746,8 +778,7 @@ END_ARRANGE:
 	printScript("All right, arrangement all done. \n", "알겠습니다. 전투 준비를 완료했습니다!")
 	return myBoard
 }
-func updateBoard(board *[boardSize][boardSize]int, row int, col int, tileNum int) {
-	// read board changes from server and update
+func updateBoard(board *[boardSize][boardSize]int, row int, col int, tileNum int) { // read board changes from server and update
 	(*board)[row][col] = tileNum
 }
 func isDefeat(myBoard [boardSize][boardSize]int, enemyBoard [boardSize][boardSize]int) int { // checks winner, at every end of each player's turn. return value -1: no winner yet; 0: I win; 1: Enemy win
@@ -773,7 +804,7 @@ func isDefeat(myBoard [boardSize][boardSize]int, enemyBoard [boardSize][boardSiz
 		return -1
 	}
 }
-func isDestoyed(pMyBoard *[boardSize][boardSize]int) [5]int {
+func isDestoyed(pMyBoard *[boardSize][boardSize]int) [5]int { // check whether the ships are destroyed or not
 	var (
 		carrierCount    int = 0
 		battleshipCount int = 0
@@ -846,7 +877,7 @@ func selectLanguage() { // needs more development
 	}
 	fmt.Print("\n")
 }
-func printScript(enScript string, krScript string) {
+func printScript(enScript string, krScript string) { // prints game script
 	var script string
 	if language == "kr" {
 		script = krScript
@@ -862,7 +893,7 @@ func printScript(enScript string, krScript string) {
 		time.Sleep(0 * time.Millisecond)
 	}
 }
-func printLine(lineNum int, length int) {
+func printLine(lineNum int, length int) { // prints line (---)
 	for i := 0; i < length; i++ {
 		fmt.Print(convertToUnicode(lineNum))
 		time.Sleep(10 * time.Millisecond)
@@ -875,7 +906,7 @@ func checkTile() { // just for checking, have no effect on operation
 		printLine(i, 1)
 	}
 }
-func showWinner(winner int) {
+func showWinner(winner int) { // prints winner
 	fmt.Println("Game Over!")
 	// who is winner?
 	switch winner {
@@ -939,7 +970,7 @@ func convertToUnicode(tileNum int) (unicode string) { // converts tile number ->
 	}
 	return
 }
-func getUserInput() (userInput string) {
+func getUserInput() (userInput string) { // get user input and strip white spaces
 	for true { // if there's error in user input data, continue;
 		in := bufio.NewReader(os.Stdin)
 		line, err := in.ReadString('\n')
@@ -967,7 +998,7 @@ func getUserInput() (userInput string) {
 	}
 	return
 }
-func lstrip(pLine *string) {
+func lstrip(pLine *string) { // strip white spaces of left side
 	if len(*pLine) < 1 {
 		return
 	}
@@ -978,7 +1009,7 @@ func lstrip(pLine *string) {
 		tmp = (*pLine)[0]
 	}
 }
-func rstrip(pLine *string) {
+func rstrip(pLine *string) { // strip white spaces of right side
 	if len(*pLine) < 1 {
 		return
 	}

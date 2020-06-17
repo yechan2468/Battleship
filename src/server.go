@@ -1,6 +1,6 @@
 // Code for 'Battleship' game server
 // Written by Yechan Lee, 2020.04. -
-// Game version 0.0.0 (on development)
+// Game version 1.0.0
 
 package main
 
