@@ -41,10 +41,13 @@
 - You can change the size of the gameboard. In the source code(/src/client.go), you can find `const ( ... boardSize int = 10 ... )`. If you replace 10 with other integer numbers, you can decrease or increase the board width. *Caution*: the longest ship size is 6(carrier or mothership), so if the size of the gameboard is smaller than 6 the game will not operate properly.
 - You can also change the UI (unicode) of the gameboard. In the same location `const (...)`, there are unicodes tables like `sunkUnicode    string = "\u2620" / hitUnicode string = "\u2739" / ...`. You can change unicode value. It does not affect on gaming, or network. It just changes the way the gameboard is printed on your screen, so don't worry!
 
-## 3. System Requirements
+## 3. Demo video
+- Please check out https://drive.google.com/file/d/19Cm2Sto--cPTbtYDfh9rHGlnGrdmSfyF/view?usp=sharing
+
+## 4. System Requirements
 - OS: Windows(64bit, 32bit), Linux(64bit, 32bit)
 - The network has to be available
 
-## 4. Bug Reports
+## 5. Bug Reports
 - Please report bugs, or improvements to yechan24680@gmail.com
 - Thank you for playing!
